@@ -157,7 +157,7 @@ const styles = {
 };
 
 export default function PlayerScreen({ player, onStop }) {
-  const { phase, playerState, currentStep, blockInfo, loadProgress, holdRemaining } = player;
+  const { phase, playerState, currentStep, blockInfo, loadProgress, holdRemaining, scriptTitle } = player;
 
   if (phase === 'loading') {
     const pct = loadProgress.total > 0
@@ -185,14 +185,17 @@ export default function PlayerScreen({ player, onStop }) {
   }
 
   if (phase === 'done') {
+    const isRoutine = scriptTitle === 'おやすみルーティン';
     return (
       <div style={styles.wrap}>
         <div style={styles.doneWrap}>
           <div style={styles.doneMoon}>🌙</div>
           <div style={styles.doneText}>
-            おやすみなさい。
-            <br />
-            ゆっくり眠れますように。
+            {isRoutine ? (
+              <>おやすみなさい。<br />ゆっくり眠れますように。</>
+            ) : (
+              <>おわり。<br />{scriptTitle}</>
+            )}
           </div>
         </div>
         <div style={styles.controls}>
@@ -214,6 +217,9 @@ export default function PlayerScreen({ player, onStop }) {
   return (
     <div style={styles.wrap}>
       <div style={styles.header}>
+        <div style={{ fontSize: '11px', color: '#2a2a38', letterSpacing: '0.12em', marginBottom: '24px' }}>
+          {scriptTitle}
+        </div>
         <div style={styles.blockName}>
           {currentStep?.blockName ?? ''}
         </div>

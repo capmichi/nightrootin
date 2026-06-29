@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from 'react';
+import { useState, useRef } from 'react';
 import { ROUTINE } from '../lib/routine';
 import { getAudio, saveAudio } from '../lib/db';
 import { playChime, startSilentLoop } from '../lib/chime';
@@ -6,22 +6,26 @@ import { playChime, startSilentLoop } from '../lib/chime';
 const BATCH_SIZE = 5;
 const APP_VERSION = '1.0';
 
-// ステップのキャッシュキー
-function cacheKey(blockIdx, stepIdx) {
-  return `${ROUTINE.id}-v${APP_VERSION}-${blockIdx}-${stepIdx}`;
+function cacheKey(scriptId, blockIdx, stepIdx) {
+  return `${scriptId}-v${APP_VERSION}-${blockIdx}-${stepIdx}`;
 }
 
 function sanitizeText(text) {
   return text.replace(/[\*#\-=`]/g, '').replace(/\s+/g, ' ').trim();
 }
 
+// Fish Audio S2 タグ([soft][breathy]等)を除去 — ブラウザTTSフォールバック用
+function stripTags(text) {
+  return text.replace(/\[[^\]]*\]/g, '').trim();
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// ROUTINE をフラットな step 配列に展開
-function buildFlatSteps() {
-  return ROUTINE.blocks.flatMap((block, bi) =>
+// スクリプトをフラットな step 配列に展開
+function flattenScript(script) {
+  return script.blocks.flatMap((block, bi) =>
     block.steps.map((step, si) => ({
       ...step,
       blockId: block.id,
@@ -52,7 +56,12 @@ export function usePlayer() {
   const currentIdxRef = useRef(0);
   const playerStateRef = useRef('speaking');
 
-  const flatSteps = useMemo(() => buildFlatSteps(), []);
+  // ─── 現在のスクリプト Ref (start() 時にセット) ───
+  const flatStepsRef = useRef(flattenScript(ROUTINE));
+  const blocksRef = useRef(ROUTINE.blocks);
+  const scriptIdRef = useRef(ROUTINE.id);
+  const scriptTitleRef = useRef(ROUTINE.title);
+  const voiceKeyRef = useRef('A');
 
   // ─── ユーティリティ ───
   function alive(token) {
@@ -72,9 +81,9 @@ export function usePlayer() {
     if (!('mediaSession' in navigator)) return;
     try {
       navigator.mediaSession.metadata = new MediaMetadata({
-        title: 'おやすみルーティン',
+        title: scriptTitleRef.current,
         artist: blockName,
-        album: '20分',
+        album: '',
       });
     } catch (_) {}
   }
@@ -89,25 +98,29 @@ export function usePlayer() {
   }
 
   // ─── 音声生成・キャッシュ ───
-  async function fetchFromServer(text) {
+  async function fetchFromServer(text, voiceKey) {
     const res = await fetch('/api/fish', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: sanitizeText(text) }),
+      body: JSON.stringify({ text: sanitizeText(text), voiceKey }),
     });
     if (!res.ok) throw new Error(`fish error ${res.status}`);
     return await res.arrayBuffer();
   }
 
-  async function generateAllAudio() {
+  async function generateAllAudio(flatSteps, scriptId, voiceKey) {
     const total = flatSteps.length;
     let done = 0;
     setLoadProgress({ done, total });
 
-    // 未キャッシュ分を収集
+    // 未キャッシュ分を収集 (空テキスト=ポーズステップは即カウント)
     const needed = [];
     for (let i = 0; i < total; i++) {
-      const key = cacheKey(flatSteps[i].blockIdx, flatSteps[i].stepIdx);
+      if (!flatSteps[i].text) {
+        done++;
+        continue;
+      }
+      const key = cacheKey(scriptId, flatSteps[i].blockIdx, flatSteps[i].stepIdx);
       const cached = await getAudio(key);
       if (cached) {
         done++;
@@ -123,11 +136,10 @@ export function usePlayer() {
       await Promise.all(
         batch.map(async ({ i, key, text }) => {
           try {
-            const ab = await fetchFromServer(text);
+            const ab = await fetchFromServer(text, voiceKey);
             await saveAudio(key, ab);
           } catch (e) {
             console.warn(`step ${i} 生成失敗（ブラウザTTSにフォールバック）`, e);
-            // null のままにしておく→再生時にブラウザTTSを使う
           }
           done++;
           setLoadProgress({ done, total });
@@ -156,7 +168,6 @@ export function usePlayer() {
       audio.onerror = done;
       setTimeout(done, 120_000); // 2 分の安全タイムアウト
 
-      // キャンセル or スキップを検知
       const watcher = setInterval(() => {
         if (!alive(token)) done();
       }, 100);
@@ -179,7 +190,9 @@ export function usePlayer() {
         resolve();
       }
 
-      const utter = new SpeechSynthesisUtterance(sanitizeText(text));
+      // Fish Audio S2 タグを除去してから読み上げ
+      const ttsText = stripTags(sanitizeText(text));
+      const utter = new SpeechSynthesisUtterance(ttsText || text);
       utter.lang = 'ja-JP';
       utter.rate = 0.85;
       utter.onend = done;
@@ -203,11 +216,15 @@ export function usePlayer() {
 
   // ─── ステップ読み上げ ───
   async function speakStep(idx, token) {
+    const step = flatStepsRef.current[idx];
+
+    // 空テキスト = ポーズステップ、読み上げをスキップ
+    if (!step.text) return;
+
     playerStateRef.current = 'speaking';
     setPlayerState('speaking');
 
-    const step = flatSteps[idx];
-    const key = cacheKey(step.blockIdx, step.stepIdx);
+    const key = cacheKey(scriptIdRef.current, step.blockIdx, step.stepIdx);
     const ab = await getAudio(key);
 
     if (ab && ab.byteLength > 0) {
@@ -235,7 +252,6 @@ export function usePlayer() {
       const isPaused = pausedRef.current;
 
       if (isPaused) {
-        // ポーズ中: 残り時間を保存して待機
         savedRemaining = Math.max(0, holdEndAtRef.current - now);
         wasPaused = true;
         setHoldRemaining(Math.ceil(savedRemaining / 1000));
@@ -244,7 +260,6 @@ export function usePlayer() {
       }
 
       if (wasPaused) {
-        // 再開直後: endAt を残り時間から再計算
         holdEndAtRef.current = Date.now() + savedRemaining;
         wasPaused = false;
       }
@@ -268,7 +283,6 @@ export function usePlayer() {
     if (ctx) {
       await playChime(ctx);
     }
-    // ポーズ中ならチャイム後に待機
     while (pausedRef.current) {
       if (!alive(token)) return;
       await sleep(100);
@@ -277,13 +291,13 @@ export function usePlayer() {
 
   // ─── メインループ ───
   async function runFrom(startIdx, token) {
-    // 無音オーディオでセッション維持
     if (audioCtxRef.current && !silentSrcRef.current) {
       silentSrcRef.current = startSilentLoop(audioCtxRef.current);
     }
 
     registerMediaHandlers();
 
+    const flatSteps = flatStepsRef.current;
     for (let i = startIdx; i < flatSteps.length; i++) {
       if (!alive(token)) return;
 
@@ -291,43 +305,43 @@ export function usePlayer() {
       currentIdxRef.current = i;
       updateMediaSession(flatSteps[i].blockName);
 
-      // ポーズ中なら再開を待つ
       while (pausedRef.current) {
         if (!alive(token)) return;
         await sleep(100);
       }
 
-      // 読み上げ
       await speakStep(i, token);
       if (!alive(token)) return;
 
-      // ポーズ中なら再開を待つ
       while (pausedRef.current) {
         if (!alive(token)) return;
         await sleep(100);
       }
 
-      // 無音保持
       if (flatSteps[i].holdSec > 0) {
         await holdFor(flatSteps[i].holdSec, token);
         if (!alive(token)) return;
       }
 
-      // チャイム
       if (flatSteps[i].chime) {
         await doChime(token);
         if (!alive(token)) return;
       }
     }
 
-    // 完了
     stopSilentLoop();
     setPhase('done');
   }
 
   // ─── 公開 API ───
-  async function start() {
-    // ユーザーのジェスチャー内で AudioContext を初期化
+  async function start(script = ROUTINE) {
+    // スクリプト情報をセット
+    flatStepsRef.current = flattenScript(script);
+    blocksRef.current = script.blocks;
+    scriptIdRef.current = script.id;
+    scriptTitleRef.current = script.title;
+    voiceKeyRef.current = script.voiceKey ?? 'A';
+
     if (!audioCtxRef.current) {
       audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
     }
@@ -339,7 +353,7 @@ export function usePlayer() {
     setCurrentIdx(0);
     currentIdxRef.current = 0;
 
-    await generateAllAudio();
+    await generateAllAudio(flatStepsRef.current, script.id, script.voiceKey ?? 'A');
 
     pausedRef.current = false;
     setPhase('playing');
@@ -352,7 +366,6 @@ export function usePlayer() {
     pausedRef.current = true;
     setPhase('paused');
 
-    // 読み上げ中なら HTML Audio を一時停止
     if (playerStateRef.current === 'speaking') {
       currentAudioRef.current?.pause();
     }
@@ -363,24 +376,21 @@ export function usePlayer() {
     pausedRef.current = false;
     setPhase('playing');
 
-    // 読み上げ再開
     if (playerStateRef.current === 'speaking') {
       currentAudioRef.current?.play().catch(console.warn);
     }
-    // holding は holdFor ループが pausedRef を検知して自動再開
   }
 
   function skipBlock() {
+    const flatSteps = flatStepsRef.current;
     const currStep = flatSteps[currentIdxRef.current];
     if (!currStep) return;
 
-    // 次のブロックの先頭を探す
     const nextIdx = flatSteps.findIndex(
       (s, i) => i > currentIdxRef.current && s.blockId !== currStep.blockId
     );
     if (nextIdx === -1) return;
 
-    // 現在のループをキャンセル
     cancelLoop();
     currentAudioRef.current?.pause();
     speechSynthesis?.cancel();
@@ -410,8 +420,8 @@ export function usePlayer() {
   }
 
   // ─── 派生データ ───
-  const currentStep = flatSteps[currentIdx] ?? null;
-  const blockInfo = ROUTINE.blocks.map((block, bi) => ({
+  const currentStep = flatStepsRef.current[currentIdx] ?? null;
+  const blockInfo = blocksRef.current.map((block, bi) => ({
     id: block.id,
     name: block.name,
     isActive: block.id === currentStep?.blockId,
@@ -426,7 +436,8 @@ export function usePlayer() {
     blockInfo,
     loadProgress,
     holdRemaining,
-    totalSteps: flatSteps.length,
+    scriptTitle: scriptTitleRef.current,
+    totalSteps: flatStepsRef.current.length,
     start,
     pause,
     resume,

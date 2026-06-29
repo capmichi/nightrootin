@@ -48,10 +48,23 @@ const styles = {
     color: '#404050',
     marginTop: '16px',
     letterSpacing: '0.1em',
+    marginBottom: '56px',
+  },
+  situBtn: {
+    background: 'transparent',
+    border: '1px solid #1a1a28',
+    borderRadius: '18px',
+    padding: '10px 24px',
+    color: '#404055',
+    fontSize: '12px',
+    letterSpacing: '0.1em',
+    cursor: 'pointer',
+    transition: 'border-color 0.2s, color 0.2s',
+    WebkitTapHighlightColor: 'transparent',
   },
 };
 
-export default function HomeScreen({ onStart }) {
+export default function HomeScreen({ onStart, onSitu }) {
   return (
     <div style={styles.wrap}>
       <div style={styles.moon}>🌙</div>
@@ -77,6 +90,22 @@ export default function HomeScreen({ onStart }) {
         ▷
       </button>
       <div style={styles.btnLabel}>はじめる</div>
+
+      <button
+        style={styles.situBtn}
+        onClick={onSitu}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.borderColor = '#2a2a40';
+          e.currentTarget.style.color = '#6060a0';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.borderColor = '#1a1a28';
+          e.currentTarget.style.color = '#404055';
+        }}
+        aria-label="シチュボイス"
+      >
+        シチュボイス
+      </button>
     </div>
   );
 }

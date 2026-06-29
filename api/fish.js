@@ -37,7 +37,7 @@ export default async function handler(req, res) {
   const apiKey = process.env.FISH_AUDIO_KEY;
   if (!apiKey) return res.status(500).json({ error: 'Server misconfigured' });
 
-  const { text } = req.body;
+  const { text, voiceKey } = req.body;
   if (!text) return res.status(400).json({ error: 'Missing text' });
 
   const clean = sanitize(text);
@@ -45,7 +45,9 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Text too long' });
   }
 
-  const voiceId = process.env.FISH_VOICE_A;
+  // voiceKey → 対応する env 変数を参照。未設定なら FISH_VOICE_A にフォールバック
+  const voiceEnvKey = voiceKey ? `FISH_VOICE_${voiceKey}` : 'FISH_VOICE_A';
+  const voiceId = process.env[voiceEnvKey] || process.env.FISH_VOICE_A;
 
   try {
     const body = { text: clean, format: 'mp3', latency: 'balanced' };

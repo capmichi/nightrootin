@@ -1,6 +1,9 @@
+import { useState } from 'react';
 import { usePlayer } from './hooks/usePlayer';
+import { ROUTINE } from './lib/routine';
 import HomeScreen from './components/HomeScreen';
 import PlayerScreen from './components/PlayerScreen';
+import SituMenuScreen from './components/SituMenuScreen';
 
 const appStyle = {
   fontFamily: "'Hiragino Sans', 'Noto Sans JP', 'Helvetica Neue', sans-serif",
@@ -13,9 +16,14 @@ const appStyle = {
 
 export default function App() {
   const player = usePlayer();
+  const [screen, setScreen] = useState('home'); // 'home' | 'situ'
 
-  function handleStart() {
-    player.start();
+  function handleStartRoutine() {
+    player.start(ROUTINE);
+  }
+
+  function handleStartSitu(script) {
+    player.start(script);
   }
 
   function handleStop() {
@@ -28,8 +36,16 @@ export default function App() {
     <div style={appStyle}>
       {showPlayer ? (
         <PlayerScreen player={player} onStop={handleStop} />
+      ) : screen === 'situ' ? (
+        <SituMenuScreen
+          onSelect={handleStartSitu}
+          onBack={() => setScreen('home')}
+        />
       ) : (
-        <HomeScreen onStart={handleStart} />
+        <HomeScreen
+          onStart={handleStartRoutine}
+          onSitu={() => setScreen('situ')}
+        />
       )}
     </div>
   );
