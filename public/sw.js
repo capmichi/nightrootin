@@ -1,5 +1,5 @@
-// APP_VERSION: 1.0 — ここを変えるとキャッシュが更新される
-const CACHE_NAME = 'nightcast-v1.0';
+// APP_VERSION: 1.1 — ここを変えるとキャッシュが更新される
+const CACHE_NAME = 'nightcast-v1.1';
 
 const PRECACHE = [
   '/',
